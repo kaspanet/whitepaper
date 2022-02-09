@@ -1,2 +1,2 @@
-# whitepaper
-Collaborative effort to write the Kaspa Whitepaper.
+# The Kaspa Whitepaper
+This is a collaborative effort to write the Kaspa Whitepaper.
