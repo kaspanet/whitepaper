@@ -1,0 +1,81 @@
+\subsection{Block Relay}
+\label{part2:kaspad:p2p:block_relay}
+Blocks in Kaspa always originate from an external application, such as a miner. \
+The external application is to request block templates using the \textit{GetBlockTemplate} RPC command, generate valid blocks out of them, and send them to a Kaspa node via the \textit{SubmitBlock} RPC command. \
+In addition, blocks are propagated between Kaspa nodes via the P2P network.
+
+\subsubsection{Block Inv Messages}
+\label{part2:kaspad:p2p:block_relay:block_invs}
+
+A \textit{MsgInvRelayBlock} message contains exactly one Kaspa block hash. \
+A Kaspa node that sends a \textit{MsgInvRelayBlock} message is expected to have the block whose hash is included in the message.
+
+
+\subsubsection{Broadcasting Block Inv Messages}
+\label{part2:kaspad:p2p:block_relay:broadcast_block_invs}
+
+Once a block has been added to the node's DAG (either through the \textit{SubmitBlock} RPC command or via a P2P peer), a new \textit{MsgInvRelayBlock} is created and the block's hash is added to it. \
+This message is then sent to every single P2P peer that the Kaspa node is connected to.
+
+
+\subsubsection{Receiving and Handling Block Inv Messages}
+\label{part2:kaspad:p2p:block_relay:receive_block_invs}
+
+On receiving a \textit{MsgInvRelayBlock} message, a Kaspa node checks whether it already knows about a block. \
+If it does, and the block is known to be invalid, the peer that sent the original \textit{MsgInvRelayBlock} is considered to be misbehaving and must be banned. \
+If it does, and the block is known to be an orphan, skip the block. \
+If it does not know about the block, the node is to create a new \textit{MsgRequestRelayBlocks} message, add to it the block hash from the original \textit{MsgInvRelayBlock} message, and send it to the peer that sent the original \textit{MsgInvRelayBlock} message. \
+The peer is expected to answer immediately, and to itself know of the block hash contained within the \textit{MsgRequestRelayBlocks} message.
+
+The local Kaspa node then waits for a \textit{MsgBlock} message. Once it arrives, it processes it the following way:
+\begin{itemize}
+    \item The node calculates the hash pf the received block. Is the calculated hash equal to the hash in the original \textit{MsgInvRelayBlock} message? If it isn't, the peer must be banned.
+    \item Does received block contain one or more transactions? If it doesn't, the peer had attempted to send a HeaderOnly block and is misbehaving, and as such must be banned.
+    \item The node attempts to add the block to the DAG.
+    \begin{itemize}
+        \item If the block is found to a pruned block, ignore it.
+        \item If the block is missing one or more of its parents, the block is considered an orphan and is processed through Orphan Resolution (see below).
+        \item If the block was rejected for any other reason, disconnect from the peer immediately (but do not ban them).
+    \end{itemize}
+\end{itemize}
+
+
+\subsubsection{Choice of Orphan Resolution Method}
+\label{part2:kaspad:p2p:block_relay:orphan_resolution}
+
+An orphan block is any block whose parents aren't currently know to the Kaspa node. \
+Orphan blocks may be resolved (that is to say, the Kaspa node gain enough information to either accept the block into the DAG or reject it) either via Relay Orphan Resolution or IBD.
+
+To choose a method, a node must do as follows:
+\begin{itemize}
+    \item Create a \textit{MsgRequestBlockLocator} message, set the message's \textit{highHash} to the orphan block's hash, and set the message's \textit{limit} to the logorithm of the maximum amount of chain blocks the Kaspa node is willing to resolve using Relay Orphan Resolution. \
+    That is to say, if the \textit{limit} is set to \textit{5}, the node is willing to resolve up to 32 chain blocks ($2^5 = 32$) using Relay Orphan Resolution.
+    \item Send the \textit{MsgRequestBlockLocator} message to the peer that originally sent the orphan.
+    \item The peer is expected to answer immediately with a \textit{MsgBlockLocator} message containing     \textit{limit + 1} hashes of a logorithmic set of chain blocks under \textit{highHash}. \
+Meaning that if \textit{limit} is set to \textit{5}, the hashes are expected to be of depths 1, 2, 4, 8, 16, and 32.
+    \item The Kaspa node is to go over all these hashes.
+    \begin{itemize}
+        \item If ANY of them are known, it chooses Relay Orphan Resolution.
+        \item Otherwise, it chooses IBD (\cref{part2:kaspad:p2p:ibd}).
+    \end{itemize}
+\end{itemize}
+
+
+\subsubsection{Relay Orphan Resolution}
+
+Blocks chosen to be resolved using Relay Orphan Resolution are added to a dedicated Orphan Pool. \
+Every time a block gets added to this pool, the Kaspa node is to collect a set of blocks that will resolve one "step" of blocks from the pool.
+
+These blocks, called the Orphan Roots, are collected in the following fashion:
+\begin{enumerate}
+    \item Add the original orphan block to a queue.
+    \item For every block in the queue:
+    \begin{itemize}
+        \item If the block is a known orphan, add all its parents to the queue.
+        \item Otherwise, if the block is not in the DAG, add it to the Orphan Roots.
+    \end{itemize}
+\end{enumerate}
+
+
+The Kaspa node must then create \textit{MsgRequestRelayBlocks} messages containing the above Orphan Roots and send them to the peer that sent the original orphan block. \
+The response \textit{MsgBlock} messages are then handled as though they came in through the regular block relay that is outlined in the rest of this document.
